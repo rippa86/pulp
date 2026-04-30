@@ -1,0 +1,90 @@
+---
+- name: Install and configure Pulp on RHEL with Red Hat CDN sync
+  hosts: pulp_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # RHSM registration options:
+    # - Use activation key + org (recommended for automation), OR
+    # - Use username/password.
+    rhsm_activation_key: ""
+    rhsm_org_id: ""
+    rhsm_username: ""
+    rhsm_password: ""
+    # Pin a minor (e.g. "10.0") if you need a specific release; "10" uses the major stream.
+    rhsm_release: "10"
+    rhsm_auto_attach: true
+
+    # RHEL 10 CDN repos required for Pulp install dependencies (x86_64).
+    # For aarch64, replace x86_64 with aarch64 in each ID.
+    rhel_repos:
+      - "rhel-10-for-x86_64-baseos-rpms"
+      - "rhel-10-for-x86_64-appstream-rpms"
+      - "codeready-builder-for-rhel-10-x86_64-rpms"
+
+    # Pulp installer role vars (customize as needed).
+    # This playbook assumes the `pulp.pulp_installer` collection is installed.
+    pulp_settings:
+      content_origin: "https://{{ ansible_fqdn }}"
+      allowed_content_checksums:
+        - sha224
+        - sha256
+        - sha384
+        - sha512
+    pulp_default_admin_password: "{{ default_pulp_passwd }}"
+
+  pre_tasks:
+    - name: Ensure required RHSM tooling is present
+      ansible.builtin.dnf:
+        name:
+          - subscription-manager
+          - dnf-plugins-core
+        state: present
+
+    - name: Register system using activation key and org
+      community.general.redhat_subscription:
+        state: present
+        activationkey: "{{ rhsm_activation_key }}"
+        org_id: "{{ rhsm_org_id }}"
+        release: "{{ rhsm_release }}"
+        auto_attach: "{{ rhsm_auto_attach }}"
+      when:
+        - rhsm_activation_key | length > 0
+        - rhsm_org_id | length > 0
+
+    - name: Register system using RHSM username/password
+      community.general.redhat_subscription:
+        state: present
+        username: "{{ rhsm_username }}"
+        password: "{{ rhsm_password }}"
+        release: "{{ rhsm_release }}"
+        auto_attach: "{{ rhsm_auto_attach }}"
+      when:
+        - rhsm_activation_key | length == 0
+        - rhsm_org_id | length == 0
+        - rhsm_username | length > 0
+        - rhsm_password | length > 0
+
+    - name: Fail when no RHSM credentials or activation key are provided
+      ansible.builtin.fail:
+        msg: >-
+          Provide either rhsm_activation_key + rhsm_org_id, or
+          rhsm_username + rhsm_password.
+      when:
+        - rhsm_activation_key | length == 0
+        - rhsm_org_id | length == 0
+        - (rhsm_username | length == 0 or rhsm_password | length == 0)
+
+    - name: Enable required Red Hat CDN repositories
+      community.general.rhsm_repository:
+        name: "{{ item }}"
+        state: enabled
+      loop: "{{ rhel_repos }}"
+
+    - name: Refresh package metadata
+      ansible.builtin.command: dnf makecache
+      changed_when: false
+
+  roles:
+    - role: pulp.pulp_installer.pulp_all_services
