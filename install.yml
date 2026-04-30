@@ -1,6 +1,6 @@
 ---
 - name: Install and configure Pulp on RHEL with Red Hat CDN sync
-  hosts: pulp_servers
+  hosts: "{{ pulp_server }}"
   become: true
   gather_facts: true
 
