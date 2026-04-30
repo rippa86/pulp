@@ -8,10 +8,10 @@
     # RHSM registration options:
     # - Use activation key + org (recommended for automation), OR
     # - Use username/password.
-    rhsm_activation_key: ""
-    rhsm_org_id: ""
-    rhsm_username: ""
-    rhsm_password: ""
+    # rhsm_activation_key: ""
+    # rhsm_org_id: ""
+    # rhsm_username: ""
+    # rhsm_password: ""
     # Pin a minor (e.g. "10.0") if you need a specific release; "10" uses the major stream.
     rhsm_release: "10"
     rhsm_auto_attach: true
