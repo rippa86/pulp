@@ -13,6 +13,13 @@
   gather_facts: true
 
   vars:
+    pulp_public_hostname: rhel-pulp.lab.rippa.io
+    pulp_public_ip: "10.10.4.101"
+    pulp_extra_allowed_hosts: []
+    # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
+    pulp_content_origin: ""
+    # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
+    pulp_manage_firewall: true
     # RHSM — activation key + org (recommended) or username/password
     # rhsm_activation_key: ""
     # rhsm_org_id: ""
@@ -111,22 +118,43 @@
         - "{{ pulp_data_root }}/containers"
         - "{{ pulp_data_root }}/container_build"
 
-    - name: Write minimal Pulpcore settings
-      ansible.builtin.copy:
-        dest: "{{ pulp_data_root }}/settings/settings.py"
-        mode: "0644"
-        content: |
-          CONTENT_ORIGIN = "{{ pulp_effective_content_origin }}"
-      vars:
+    - name: Build Django ALLOWED_HOSTS list
+      ansible.builtin.set_fact:
+        pulp_merged_allowed_hosts: >-
+          {{
+            (
+              [pulp_public_hostname, pulp_public_ip, ansible_fqdn, 'localhost', '127.0.0.1']
+              + (pulp_extra_allowed_hosts | default([]))
+            ) | reject('equalto', '') | unique | list
+          }}
+
+    - name: Compute CONTENT_ORIGIN URL
+      ansible.builtin.set_fact:
         pulp_effective_content_origin: >-
           {{
             pulp_content_origin
             if (pulp_content_origin | default('') | length > 0)
             else (
               ('https' if pulp_https else 'http')
-              ~ '://' ~ ansible_fqdn ~ ':' ~ (pulp_publish_port | string)
+              ~ '://' ~ pulp_public_hostname ~ ':' ~ (pulp_publish_port | string)
             )
           }}
+
+    - name: Write Pulpcore settings (CONTENT_ORIGIN + ALLOWED_HOSTS)
+      ansible.builtin.copy:
+        dest: "{{ pulp_data_root }}/settings/settings.py"
+        mode: "0644"
+        content: |
+          CONTENT_ORIGIN = "{{ pulp_effective_content_origin }}"
+          ALLOWED_HOSTS = {{ pulp_merged_allowed_hosts | to_json }}
+
+    - name: Allow Pulp port through firewalld
+      community.general.firewalld:
+        port: "{{ pulp_publish_port }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+      when: pulp_manage_firewall | bool
 
     - name: Run Pulp container
       containers.podman.podman_container:
@@ -136,7 +164,7 @@
         restart_policy: always
         pull: newer
         publish:
-          - "{{ pulp_publish_port }}:{{ '443' if pulp_https else '80' }}"
+          - "0.0.0.0:{{ pulp_publish_port }}:{{ '443' if pulp_https else '80' }}"
         env:
           PULP_HTTPS: "{{ 'true' if pulp_https else 'false' }}"
         volumes:
@@ -148,15 +176,23 @@
         device:
           - /dev/fuse
 
-    - name: Wait for Pulp API to respond
+    - name: Wait for Pulp API (via public hostname Host header)
       ansible.builtin.uri:
         url: "{{ 'https' if pulp_https else 'http' }}://127.0.0.1:{{ pulp_publish_port }}/pulp/api/v3/status/"
+        headers:
+          Host: "{{ pulp_public_hostname }}"
         validate_certs: false
         status_code: 200
       register: pulp_api_check
       until: pulp_api_check.status == 200
       retries: 36
       delay: 5
+
+    - name: Verify Pulp API reachable by IP
+      ansible.builtin.uri:
+        url: "{{ 'https' if pulp_https else 'http' }}://{{ pulp_public_ip }}:{{ pulp_publish_port }}/pulp/api/v3/status/"
+        validate_certs: false
+        status_code: 200
 
     - name: Apply admin password when variable is set
       ansible.builtin.shell: |
