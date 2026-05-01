@@ -8,7 +8,7 @@
 # Syncing Red Hat content into Pulp is configured inside Pulp (remotes/repos), not via these OS repos.
 
 - name: Run Pulp in a Podman container on RHEL with Red Hat CDN registration
-  hosts: "{{ pulp_host }}
+  hosts: "{{ pulp_host }}"
   become: true
   gather_facts: true
 
