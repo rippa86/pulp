@@ -34,6 +34,7 @@
       - "rhel-10-for-x86_64-appstream-rpms"
 
     # Container / layout
+    pulp_rpm_sync_policy: additive
     pulp_image: "docker.io/pulp/pulp:stable"
     pulp_container_name: pulp
     pulp_publish_port: 8080
@@ -129,8 +130,8 @@
       ansible.builtin.command: dnf makecache
       changed_when: false
 
-  tasks:
 
+  tasks:
     - name: Install Podman
       ansible.builtin.dnf:
         name: podman
@@ -389,45 +390,242 @@
             pulp_rh_client_cert_pem: "{{ pulp_slurp_rh_cert.content | b64decode }}"
           no_log: true
 
-        - name: Create or update RPM remotes pointing at Red Hat CDN
-          pulp.squeezer.rpm_remote:
-            pulp_url: "{{ pulp_api_base_url }}"
-            username: "{{ pulp_admin_username }}"
-            password: "{{ pulp_squeezer_password }}"
-            validate_certs: "{{ pulp_api_validate_certs }}"
-            name: "{{ item.remote }}"
-            url: "{{ item.url }}"
-            tls_validation: true
-            ca_cert: "{{ pulp_rh_ca_pem }}"
-            client_cert: "{{ pulp_rh_client_cert_pem }}"
-            client_key: "{{ pulp_rh_client_key_pem }}"
-            policy: "{{ pulp_rpm_remote_policy }}"
-            state: present
-          loop: "{{ pulp_rhel_cdn_repositories }}"
-          delegate_to: localhost
+        # --- Pulp RPM API via uri (no pulp_glue) ---
+        - name: Initialize RPM remote href map
+          ansible.builtin.set_fact:
+            pulp_remote_hrefs_merged: {}
 
-        - name: Create or update RPM repositories (BaseOS and AppStream)
-          pulp.squeezer.rpm_repository:
-            pulp_url: "{{ pulp_api_base_url }}"
-            username: "{{ pulp_admin_username }}"
-            password: "{{ pulp_squeezer_password }}"
+        - name: Query existing RPM remotes by name
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/remotes/rpm/rpm/?name={{ item.remote | urlencode }}"
+            method: GET
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
             validate_certs: "{{ pulp_api_validate_certs }}"
-            name: "{{ item.repo }}"
-            remote: "{{ item.remote }}"
-            state: present
+            return_content: true
+            status_code: [200]
           loop: "{{ pulp_rhel_cdn_repositories }}"
+          register: pulp_remote_query
           delegate_to: localhost
+          no_log: true
 
-        - name: Sync RPM repositories from Red Hat CDN (long-running)
-          pulp.squeezer.rpm_sync:
-            pulp_url: "{{ pulp_api_base_url }}"
-            username: "{{ pulp_admin_username }}"
-            password: "{{ pulp_squeezer_password }}"
+        - name: Record existing RPM remote pulp_hrefs
+          ansible.builtin.set_fact:
+            pulp_remote_hrefs_merged: "{{ pulp_remote_hrefs_merged | combine({ merge.item.remote: merge.json.results[0].pulp_href }) }}"
+          loop: "{{ pulp_remote_query.results }}"
+          loop_var: merge
+          when: merge.json.count | default(0) | int > 0
+
+        - name: Create RPM remote when missing
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/remotes/rpm/rpm/"
+            method: POST
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
             validate_certs: "{{ pulp_api_validate_certs }}"
-            repository: "{{ item.repo }}"
-            remote: "{{ item.remote }}"
-            timeout: "{{ pulp_rpm_sync_timeout }}"
+            body_format: json
+            body:
+              name: "{{ item.remote }}"
+              url: "{{ item.url }}"
+              tls_validation: true
+              ca_cert: "{{ pulp_rh_ca_pem }}"
+              client_cert: "{{ pulp_rh_client_cert_pem }}"
+              client_key: "{{ pulp_rh_client_key_pem }}"
+              policy: "{{ pulp_rpm_remote_policy }}"
+            status_code: [201]
           loop: "{{ pulp_rhel_cdn_repositories }}"
+          when: item.remote not in pulp_remote_hrefs_merged
+          register: pulp_remote_create
           delegate_to: localhost
+          no_log: true
+
+        - name: Update existing RPM remote (CDN URL and entitlement PEMs)
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}{{ pulp_remote_hrefs_merged[item.remote] }}"
+            method: PATCH
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            body_format: json
+            body:
+              url: "{{ item.url }}"
+              tls_validation: true
+              ca_cert: "{{ pulp_rh_ca_pem }}"
+              client_cert: "{{ pulp_rh_client_cert_pem }}"
+              client_key: "{{ pulp_rh_client_key_pem }}"
+              policy: "{{ pulp_rpm_remote_policy }}"
+            status_code: [200, 202]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          when: item.remote in pulp_remote_hrefs_merged
+          delegate_to: localhost
+          no_log: true
+
+        - name: Refresh RPM remote query after creates
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/remotes/rpm/rpm/?name={{ item.remote | urlencode }}"
+            method: GET
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            return_content: true
+            status_code: [200]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          register: pulp_remote_query_final
+          delegate_to: localhost
+          no_log: true
+
+        - name: Build final RPM remote pulp_href map
+          ansible.builtin.set_fact:
+            pulp_remote_hrefs_final: "{{ pulp_remote_hrefs_final | default({}) | combine({ z.item.remote: z.json.results[0].pulp_href }) }}"
+          loop: "{{ pulp_remote_query_final.results }}"
+          loop_var: z
+          when: z.json.count | default(0) | int > 0
+
+        - name: Ensure RPM remote href map is complete
+          ansible.builtin.assert:
+            that:
+              - pulp_remote_hrefs_final[check.remote] is defined
+            fail_msg: "Missing pulp_href for remote {{ check.remote }} after create/query."
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          loop_var: check
+
+        - name: Initialize RPM repository href map
+          ansible.builtin.set_fact:
+            pulp_repo_hrefs_merged: {}
+
+        - name: Query existing RPM repositories by name
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/repositories/rpm/rpm/?name={{ item.repo | urlencode }}"
+            method: GET
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            return_content: true
+            status_code: [200]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          register: pulp_repo_query
+          delegate_to: localhost
+          no_log: true
+
+        - name: Record existing RPM repository pulp_hrefs
+          ansible.builtin.set_fact:
+            pulp_repo_hrefs_merged: "{{ pulp_repo_hrefs_merged | combine({ rp.item.repo: rp.json.results[0].pulp_href }) }}"
+          loop: "{{ pulp_repo_query.results }}"
+          loop_var: rp
+          when: rp.json.count | default(0) | int > 0
+
+        - name: Create RPM repository when missing
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/repositories/rpm/rpm/"
+            method: POST
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            body_format: json
+            body:
+              name: "{{ item.repo }}"
+              remote: "{{ pulp_remote_hrefs_final[item.remote] }}"
+            status_code: [201]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          when: item.repo not in pulp_repo_hrefs_merged
+          delegate_to: localhost
+          no_log: true
+
+        - name: Point existing RPM repository at remote
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}{{ pulp_repo_hrefs_merged[item.repo] }}"
+            method: PATCH
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            body_format: json
+            body:
+              remote: "{{ pulp_remote_hrefs_final[item.remote] }}"
+            status_code: [200, 202]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          when: item.repo in pulp_repo_hrefs_merged
+          delegate_to: localhost
+          no_log: true
+
+        - name: Refresh RPM repository hrefs after create or update
+          ansible.builtin.uri:
+            url: "{{ pulp_api_base_url }}/pulp/api/v3/repositories/rpm/rpm/?name={{ item.repo | urlencode }}"
+            method: GET
+            url_username: "{{ pulp_admin_username }}"
+            url_password: "{{ pulp_squeezer_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            return_content: true
+            status_code: [200]
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          register: pulp_repo_query_final
+          delegate_to: localhost
+          no_log: true
+
+        - name: Build final RPM repository pulp_href map
+          ansible.builtin.set_fact:
+            pulp_repo_hrefs_final: "{{ pulp_repo_hrefs_final | default({}) | combine({ rq.item.repo: rq.json.results[0].pulp_href }) }}"
+          loop: "{{ pulp_repo_query_final.results }}"
+          loop_var: rq
+          when: rq.json.count | default(0) | int > 0
+
+        - name: Ensure RPM repository href map is complete
+          ansible.builtin.assert:
+            that:
+              - pulp_repo_hrefs_final[chk.repo] is defined
+            fail_msg: "Missing pulp_href for repository {{ chk.repo }}."
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          loop_var: chk
+
+        - name: Sync RPM repositories from Red Hat CDN (optional, long-running)
           when: pulp_sync_rhel_cdn_repos | bool
+          block:
+            - name: Queue RPM repository sync against Red Hat CDN
+              ansible.builtin.uri:
+                url: "{{ pulp_api_base_url }}{{ pulp_repo_hrefs_final[item.repo] }}sync/"
+                method: POST
+                url_username: "{{ pulp_admin_username }}"
+                url_password: "{{ pulp_squeezer_password }}"
+                force_basic_auth: true
+                validate_certs: "{{ pulp_api_validate_certs }}"
+                body_format: json
+                body:
+                  remote: "{{ pulp_remote_hrefs_final[item.remote] }}"
+                  optimize: true
+                  sync_policy: "{{ pulp_rpm_sync_policy }}"
+                status_code: [202]
+                return_content: true
+              loop: "{{ pulp_rhel_cdn_repositories }}"
+              register: pulp_sync_post
+              delegate_to: localhost
+              no_log: true
 
+            - name: Poll Pulp until each sync task completes
+              ansible.builtin.uri:
+                url: "{{ pulp_api_base_url }}{{ sync_item.json.task }}"
+                method: GET
+                url_username: "{{ pulp_admin_username }}"
+                url_password: "{{ pulp_squeezer_password }}"
+                force_basic_auth: true
+                validate_certs: "{{ pulp_api_validate_certs }}"
+                return_content: true
+                status_code: [200]
+              register: pulp_sync_poll
+              until: pulp_sync_poll.json.state in ['completed', 'failed', 'canceled']
+              retries: "{{ [(pulp_rpm_sync_timeout | int / 10) | int, 30] | max }}"
+              delay: 10
+              failed_when: pulp_sync_poll.json.state | default('') in ['failed', 'canceled']
+              loop: "{{ pulp_sync_post.results }}"
+              loop_var: sync_item
+              delegate_to: localhost
+              no_log: true
+              when:
+                - sync_item.get('skipped', false) == false
+                - sync_item.json.task is defined
