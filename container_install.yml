@@ -28,12 +28,44 @@
     # rhsm_release: "10"
     # rhsm_auto_attach: true
     pulp_enable_ui: true
-
     # Repos needed on the host for Podman (x86_64). Add CRB only if you need extra build deps.
     rhel_repos:
       - "rhel-10-for-x86_64-baseos-rpms"
       - "rhel-10-for-x86_64-appstream-rpms"
 
+    # Container / layout
+    pulp_image: "docker.io/pulp/pulp:stable"
+    pulp_container_name: pulp
+    pulp_publish_port: 8080
+    pulp_https: false
+    pulp_data_root: /var/lib/pulp-stack
+    # Public names clients use (Django ALLOWED_HOSTS + default CONTENT_ORIGIN host).
+    pulp_public_hostname: rhel-pulp.lab.rippa.io
+    pulp_public_ip: "10.10.4.101"
+    # Extra Host headers to allow (strings). localhost/127.0.0.1 are always added for local checks.
+    pulp_extra_allowed_hosts: []
+    # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
+    pulp_content_origin: ""
+    # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
+    # If set, playbook attempts a non-interactive admin password reset inside the container (use Ansible Vault).
+    pulp_admin_password: ""
+    # Pulp UI (beta) is built into current pulp/pulp OCI images; served at /ui/ . Set false to disable.
+    pulp_enable_ui: true
+    # Must match pulp-oci-images nginx template (template_nginx.py); override if your image differs.
+    pulp_static_root: "/var/lib/operator/static"
+
+    # Pulp RPM: RHEL BaseOS + AppStream remotes/repos (Red Hat CDN). Requires host RHSM entitlement files.
+    pulp_configure_rhel_cdn_repos: true
+    pulp_sync_rhel_cdn_repos: true
+    pulp_admin_username: admin
+    # If empty, falls back to pulp_admin_password for API auth (set one of them for repo tasks).
+    #pulp_api_password: ""
+    # Override if your Ansible controller must use a different URL to reach Pulp than pulp_public_hostname:port.
+    pulp_api_public_base_url: ""
+    pulp_api_validate_certs: true
+    pulp_rpm_remote_policy: on_demand
+    pulp_rpm_sync_timeout: 86400
+    pulp_rhsm_ca_cert_path: /etc/rhsm/ca/redhat-uep.pem
     # # Container / layout
     # pulp_image: "docker.io/pulp/pulp:stable"
     # pulp_container_name: pulp
@@ -98,6 +130,7 @@
       changed_when: false
 
   tasks:
+
     - name: Install Podman
       ansible.builtin.dnf:
         name: podman
@@ -141,21 +174,107 @@
             )
           }}
 
-    - name: Write Pulpcore settings (CONTENT_ORIGIN + ALLOWED_HOSTS)
+    - name: Compute Pulp API base URL for Ansible (controller reaches this URL)
+      ansible.builtin.set_fact:
+        pulp_api_base_url: >-
+          {{
+            pulp_api_public_base_url
+            if (pulp_api_public_base_url | default('') | length > 0)
+            else (
+              ('https' if pulp_https else 'http')
+              ~ '://' ~ pulp_public_hostname ~ ':' ~ (pulp_publish_port | string)
+            )
+          }}
+
+    - name: Derive RHEL CDN path components for Pulp
+      ansible.builtin.set_fact:
+        pulp_rhel_major: "{{ rhsm_release.split('.')[0] }}"
+        pulp_rhel_dist: "rhel{{ rhsm_release.split('.')[0] }}"
+        pulp_rhel_cdn_release: "{{ rhsm_release }}"
+        pulp_rhel_arch: "{{ 'aarch64' if ansible_architecture == 'aarch64' else 'x86_64' }}"
+      when: pulp_configure_rhel_cdn_repos | bool
+
+    - name: Define RHEL CDN repo/remotes for Pulp (BaseOS + AppStream)
+      ansible.builtin.set_fact:
+        pulp_rhel_cdn_repositories:
+          - repo: "rhel-{{ pulp_rhel_major }}-baseos"
+            remote: "rhsm-cdn-rhel-{{ pulp_rhel_major }}-baseos"
+            url: "https://cdn.redhat.com/content/dist/{{ pulp_rhel_dist }}/{{ pulp_rhel_cdn_release }}/{{ pulp_rhel_arch }}/baseos/os/"
+          - repo: "rhel-{{ pulp_rhel_major }}-appstream"
+            remote: "rhsm-cdn-rhel-{{ pulp_rhel_major }}-appstream"
+            url: "https://cdn.redhat.com/content/dist/{{ pulp_rhel_dist }}/{{ pulp_rhel_cdn_release }}/{{ pulp_rhel_arch }}/appstream/os/"
+      when: pulp_configure_rhel_cdn_repos | bool
+
+    - name: Build CSRF_TRUSTED_ORIGINS (hostname + IP + optional override)
+      ansible.builtin.set_fact:
+        pulp_csrf_trusted_origins: >-
+          {{
+            (
+              [
+                ('https' if pulp_https else 'http') ~ '://' ~ pulp_public_hostname ~ ':' ~ (pulp_publish_port | string),
+                ('https' if pulp_https else 'http') ~ '://' ~ pulp_public_ip ~ ':' ~ (pulp_publish_port | string),
+              ]
+              + ([pulp_content_origin] if (pulp_content_origin | default('') | length > 0) else [])
+            ) | unique | list
+          }}
+
+    - name: Write Pulpcore settings (CONTENT_ORIGIN + ALLOWED_HOSTS + CSRF for UI login)
       ansible.builtin.copy:
         dest: "{{ pulp_data_root }}/settings/settings.py"
         mode: "0644"
         content: |
           CONTENT_ORIGIN = "{{ pulp_effective_content_origin }}"
           ALLOWED_HOSTS = {{ pulp_merged_allowed_hosts | to_json }}
+          CSRF_TRUSTED_ORIGINS = {{ pulp_csrf_trusted_origins | to_json }}
 
+    - name: Write Pulp UI config (same-origin API relative to browser URL)
+      ansible.builtin.copy:
+        dest: "{{ pulp_data_root }}/settings/pulp-ui-config.json"
+        mode: "0644"
+        content: |
+          {
+            "API_BASE_PATH": "/pulp/api/v3/",
+            "UI_BASE_PATH": "/ui/"
+          }
+      when: pulp_enable_ui | bool
+
+    - name: Build Podman volume list for Pulp container
+      ansible.builtin.set_fact:
+        pulp_podman_volumes_final: >-
+          {{
+            [
+              pulp_data_root ~ '/settings:/etc/pulp' ~ pulp_volume_z,
+              pulp_data_root ~ '/pulp_storage:/var/lib/pulp' ~ pulp_volume_z,
+              pulp_data_root ~ '/pgsql:/var/lib/pgsql' ~ pulp_volume_z,
+              pulp_data_root ~ '/containers:/var/lib/containers' ~ pulp_volume_z,
+              pulp_data_root ~ '/container_build:/var/lib/pulp/.local/share/containers' ~ pulp_volume_z,
+            ]
+            + (
+                [
+                  pulp_data_root ~ '/settings/pulp-ui-config.json:' ~ pulp_static_root ~ '/pulp_ui/pulp-ui-config.json' ~ pulp_volume_z,
+                ]
+              if pulp_enable_ui | bool else []
+              )
+          }}
+
+    - name: Check whether firewalld is running
+      ansible.builtin.command: systemctl is-active firewalld
+      register: pulp_firewalld_is_active
+      changed_when: false
+      failed_when: false
+      when: pulp_manage_firewall | bool
+
+    # Uses ansible.posix (not community.general). Add ansible.posix to your EE / controller.
     - name: Allow Pulp port through firewalld
       ansible.posix.firewalld:
         port: "{{ pulp_publish_port }}/tcp"
         permanent: true
         state: enabled
         immediate: true
-      when: pulp_manage_firewall | bool
+      when:
+        - pulp_manage_firewall | bool
+        - pulp_firewalld_is_active.rc == 0
+        - pulp_firewalld_is_active.stdout | trim == 'active'
 
     - name: Run Pulp container
       containers.podman.podman_container:
@@ -167,14 +286,10 @@
         publish:
           - "0.0.0.0:{{ pulp_publish_port }}:{{ '443' if pulp_https else '80' }}"
         env:
-          PULP_UI: "{{ 'true' if pulp_enable_ui | bool else 'false' }}"
           PULP_HTTPS: "{{ 'true' if pulp_https else 'false' }}"
-        volumes:
-          - "{{ pulp_data_root }}/settings:/etc/pulp{{ pulp_volume_z }}"
-          - "{{ pulp_data_root }}/pulp_storage:/var/lib/pulp{{ pulp_volume_z }}"
-          - "{{ pulp_data_root }}/pgsql:/var/lib/pgsql{{ pulp_volume_z }}"
-          - "{{ pulp_data_root }}/containers:/var/lib/containers{{ pulp_volume_z }}"
-          - "{{ pulp_data_root }}/container_build:/var/lib/pulp/.local/share/containers{{ pulp_volume_z }}"
+          PULP_UI: "{{ 'true' if pulp_enable_ui | bool else 'false' }}"
+          PULP_STATIC_ROOT: "{{ pulp_static_root }}/"
+        volumes: "{{ pulp_podman_volumes_final }}"
         device:
           - /dev/fuse
 
@@ -195,7 +310,7 @@
         url: "{{ 'https' if pulp_https else 'http' }}://{{ pulp_public_ip }}:{{ pulp_publish_port }}/pulp/api/v3/status/"
         validate_certs: false
         status_code: 200
-    
+
     - name: Verify Pulp UI is served
       ansible.builtin.uri:
         url: "{{ 'https' if pulp_https else 'http' }}://127.0.0.1:{{ pulp_publish_port }}/ui/"
@@ -203,6 +318,15 @@
           Host: "{{ pulp_public_hostname }}"
         validate_certs: false
         status_code: [200, 302, 304]
+      when: pulp_enable_ui | bool
+
+    - name: Verify Pulp UI config is served on the same vhost
+      ansible.builtin.uri:
+        url: "{{ 'https' if pulp_https else 'http' }}://127.0.0.1:{{ pulp_publish_port }}/pulp-ui-config.json"
+        headers:
+          Host: "{{ pulp_public_hostname }}"
+        validate_certs: false
+        status_code: 200
       when: pulp_enable_ui | bool
 
     - name: Apply admin password when variable is set
@@ -213,3 +337,97 @@
         PULP_PW: "{{ pulp_admin_password }}"
       when: pulp_admin_password | length > 0
       no_log: true
+
+    - name: Configure Pulp RPM remotes and repositories (RHEL BaseOS + AppStream via RH CDN)
+      when:
+        - pulp_configure_rhel_cdn_repos | bool
+        - (pulp_api_password | default('') | length > 0) or (pulp_admin_password | default('') | length > 0)
+      block:
+        - name: Choose password used to authenticate to Pulp API
+          ansible.builtin.set_fact:
+            pulp_squeezer_password: "{{ pulp_api_password if pulp_api_password | length > 0 else pulp_admin_password }}"
+          no_log: true
+
+        - name: Locate RHSM entitlement key PEM for CDN client authentication
+          ansible.builtin.shell: ls -1 /etc/pki/entitlement/*-key.pem 2>/dev/null | head -1 || true
+          register: pulp_rh_entitlement_key_file
+          changed_when: false
+          failed_when: false
+
+        - name: Fail when no RHSM entitlement PEMs exist for CDN sync
+          ansible.builtin.fail:
+            msg: >-
+              Subscribe this host with RHSM (see pre_tasks) so /etc/pki/entitlement/*-key.pem exists,
+              or set pulp_configure_rhel_cdn_repos: false and create remotes manually.
+          when: pulp_rh_entitlement_key_file.stdout | default('') | length == 0
+
+        - name: Derive entitlement certificate path from key filename
+          ansible.builtin.set_fact:
+            pulp_rh_entitlement_cert_file: "{{ pulp_rh_entitlement_key_file.stdout | regex_replace('-key\\.pem$', '.pem') }}"
+
+        - name: Slurp Red Hat CA for CDN TLS
+          ansible.builtin.slurp:
+            src: "{{ pulp_rhsm_ca_cert_path }}"
+          register: pulp_slurp_rh_ca
+
+        - name: Slurp RHSM entitlement private key
+          ansible.builtin.slurp:
+            src: "{{ pulp_rh_entitlement_key_file.stdout }}"
+          register: pulp_slurp_rh_key
+          no_log: true
+
+        - name: Slurp RHSM entitlement certificate
+          ansible.builtin.slurp:
+            src: "{{ pulp_rh_entitlement_cert_file }}"
+          register: pulp_slurp_rh_cert
+          no_log: true
+
+        - name: Expose PEM strings for Pulp RPM remotes
+          ansible.builtin.set_fact:
+            pulp_rh_ca_pem: "{{ pulp_slurp_rh_ca.content | b64decode }}"
+            pulp_rh_client_key_pem: "{{ pulp_slurp_rh_key.content | b64decode }}"
+            pulp_rh_client_cert_pem: "{{ pulp_slurp_rh_cert.content | b64decode }}"
+          no_log: true
+
+        - name: Create or update RPM remotes pointing at Red Hat CDN
+          pulp.squeezer.rpm_remote:
+            pulp_url: "{{ pulp_api_base_url }}"
+            username: "{{ pulp_admin_username }}"
+            password: "{{ pulp_squeezer_password }}"
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            name: "{{ item.remote }}"
+            url: "{{ item.url }}"
+            tls_validation: true
+            ca_cert: "{{ pulp_rh_ca_pem }}"
+            client_cert: "{{ pulp_rh_client_cert_pem }}"
+            client_key: "{{ pulp_rh_client_key_pem }}"
+            policy: "{{ pulp_rpm_remote_policy }}"
+            state: present
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          delegate_to: localhost
+
+        - name: Create or update RPM repositories (BaseOS and AppStream)
+          pulp.squeezer.rpm_repository:
+            pulp_url: "{{ pulp_api_base_url }}"
+            username: "{{ pulp_admin_username }}"
+            password: "{{ pulp_squeezer_password }}"
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            name: "{{ item.repo }}"
+            remote: "{{ item.remote }}"
+            state: present
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          delegate_to: localhost
+
+        - name: Sync RPM repositories from Red Hat CDN (long-running)
+          pulp.squeezer.rpm_sync:
+            pulp_url: "{{ pulp_api_base_url }}"
+            username: "{{ pulp_admin_username }}"
+            password: "{{ pulp_squeezer_password }}"
+            validate_certs: "{{ pulp_api_validate_certs }}"
+            repository: "{{ item.repo }}"
+            remote: "{{ item.remote }}"
+            timeout: "{{ pulp_rpm_sync_timeout }}"
+          loop: "{{ pulp_rhel_cdn_repositories }}"
+          delegate_to: localhost
+          when: pulp_sync_rhel_cdn_repos | bool
+
