@@ -2,3 +2,4 @@ collections:
   - name: community.general
   - name: pulp.pulp_installer
   - name: containers.podman
+  - name: ansible.posix
