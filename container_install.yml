@@ -414,7 +414,8 @@
           ansible.builtin.set_fact:
             pulp_remote_hrefs_merged: "{{ pulp_remote_hrefs_merged | combine({ merge.item.remote: merge.json.results[0].pulp_href }) }}"
           loop: "{{ pulp_remote_query.results }}"
-          loop_var: merge
+          loop_control:
+            loop_var: merge
           when: merge.json.count | default(0) | int > 0
 
         - name: Create RPM remote when missing
@@ -482,7 +483,8 @@
           ansible.builtin.set_fact:
             pulp_remote_hrefs_final: "{{ pulp_remote_hrefs_final | default({}) | combine({ z.item.remote: z.json.results[0].pulp_href }) }}"
           loop: "{{ pulp_remote_query_final.results }}"
-          loop_var: z
+          loop_control:
+            loop_var: z
           when: z.json.count | default(0) | int > 0
 
         - name: Ensure RPM remote href map is complete
@@ -491,7 +493,8 @@
               - pulp_remote_hrefs_final[check.remote] is defined
             fail_msg: "Missing pulp_href for remote {{ check.remote }} after create/query."
           loop: "{{ pulp_rhel_cdn_repositories }}"
-          loop_var: check
+          loop_control:
+            loop_var: check
 
         - name: Initialize RPM repository href map
           ansible.builtin.set_fact:
@@ -516,7 +519,8 @@
           ansible.builtin.set_fact:
             pulp_repo_hrefs_merged: "{{ pulp_repo_hrefs_merged | combine({ rp.item.repo: rp.json.results[0].pulp_href }) }}"
           loop: "{{ pulp_repo_query.results }}"
-          loop_var: rp
+          loop_control:
+            loop_var: rp
           when: rp.json.count | default(0) | int > 0
 
         - name: Create RPM repository when missing
@@ -573,7 +577,8 @@
           ansible.builtin.set_fact:
             pulp_repo_hrefs_final: "{{ pulp_repo_hrefs_final | default({}) | combine({ rq.item.repo: rq.json.results[0].pulp_href }) }}"
           loop: "{{ pulp_repo_query_final.results }}"
-          loop_var: rq
+          loop_control:
+            loop_var: rq
           when: rq.json.count | default(0) | int > 0
 
         - name: Ensure RPM repository href map is complete
@@ -582,7 +587,8 @@
               - pulp_repo_hrefs_final[chk.repo] is defined
             fail_msg: "Missing pulp_href for repository {{ chk.repo }}."
           loop: "{{ pulp_rhel_cdn_repositories }}"
-          loop_var: chk
+          loop_control:
+            loop_var: chk
 
         - name: Sync RPM repositories from Red Hat CDN (optional, long-running)
           when: pulp_sync_rhel_cdn_repos | bool
@@ -623,7 +629,8 @@
               delay: 10
               failed_when: pulp_sync_poll.json.state | default('') in ['failed', 'canceled']
               loop: "{{ pulp_sync_post.results }}"
-              loop_var: sync_item
+              loop_control:
+                loop_var: sync_item
               delegate_to: localhost
               no_log: true
               when:
