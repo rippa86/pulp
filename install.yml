@@ -42,39 +42,39 @@
           - dnf-plugins-core
         state: present
 
-    - name: Register system using activation key and org
-      community.general.redhat_subscription:
-        state: present
-        activationkey: "{{ rhsm_activation_key }}"
-        org_id: "{{ rhsm_org_id }}"
-        release: "{{ rhsm_release }}"
-        auto_attach: "{{ rhsm_auto_attach }}"
-      when:
-        - rhsm_activation_key | length > 0
-        - rhsm_org_id | length > 0
+    # - name: Register system using activation key and org
+    #   community.general.redhat_subscription:
+    #     state: present
+    #     activationkey: "{{ rhsm_activation_key }}"
+    #     org_id: "{{ rhsm_org_id }}"
+    #     release: "{{ rhsm_release }}"
+    #     auto_attach: "{{ rhsm_auto_attach }}"
+    #   when:
+    #     - rhsm_activation_key | length > 0
+    #     - rhsm_org_id | length > 0
 
-    - name: Register system using RHSM username/password
-      community.general.redhat_subscription:
-        state: present
-        username: "{{ rhsm_username }}"
-        password: "{{ rhsm_password }}"
-        release: "{{ rhsm_release }}"
-        auto_attach: "{{ rhsm_auto_attach }}"
-      when:
-        - rhsm_activation_key | length == 0
-        - rhsm_org_id | length == 0
-        - rhsm_username | length > 0
-        - rhsm_password | length > 0
+    # - name: Register system using RHSM username/password
+    #   community.general.redhat_subscription:
+    #     state: present
+    #     username: "{{ rhsm_username }}"
+    #     password: "{{ rhsm_password }}"
+    #     release: "{{ rhsm_release }}"
+    #     auto_attach: "{{ rhsm_auto_attach }}"
+    #   when:
+    #     - rhsm_activation_key | length == 0
+    #     - rhsm_org_id | length == 0
+    #     - rhsm_username | length > 0
+    #     - rhsm_password | length > 0
 
-    - name: Fail when no RHSM credentials or activation key are provided
-      ansible.builtin.fail:
-        msg: >-
-          Provide either rhsm_activation_key + rhsm_org_id, or
-          rhsm_username + rhsm_password.
-      when:
-        - rhsm_activation_key | length == 0
-        - rhsm_org_id | length == 0
-        - (rhsm_username | length == 0 or rhsm_password | length == 0)
+    # - name: Fail when no RHSM credentials or activation key are provided
+    #   ansible.builtin.fail:
+    #     msg: >-
+    #       Provide either rhsm_activation_key + rhsm_org_id, or
+    #       rhsm_username + rhsm_password.
+    #   when:
+    #     - rhsm_activation_key | length == 0
+    #     - rhsm_org_id | length == 0
+    #     - (rhsm_username | length == 0 or rhsm_password | length == 0)
 
     - name: Enable required Red Hat CDN repositories
       community.general.rhsm_repository:
