@@ -3,3 +3,4 @@ collections:
   - name: pulp.pulp_installer
   - name: containers.podman
   - name: ansible.posix
+  - name: pulp.squeezer
