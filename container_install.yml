@@ -1,0 +1,155 @@
+---
+- name: Install and configure Pulp on RHEL with Red Hat CDN sync
+  hosts: "{{ pulp_server }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    # RHSM registration options:
+    # - Use activation key + org (recommended for automation), OR
+    # - Use username/password.
+    # rhsm_activation_key: ""
+    # rhsm_org_id: ""
+    # rhsm_username: ""
+    # rhsm_password: ""
+    # Pin a minor (e.g. "10.0") if you need a specific release; "10" uses the major stream.
+    # rhsm_release: "10"
+    # rhsm_auto_attach: true
+
+    # RHEL 10 CDN repos required for Pulp install dependencies (x86_64).
+    # For aarch64, replace x86_64 with aarch64 in each ID.
+    rhel_repos:
+      - "rhel-10-for-x86_64-baseos-rpms"
+      - "rhel-10-for-x86_64-appstream-rpms"
+      - "codeready-builder-for-rhel-10-x86_64-rpms"
+
+    # Pulp installer role vars (customize as needed).
+    # This playbook assumes the `pulp.pulp_installer` collection is installed.
+    pulp_settings:
+      content_origin: "https://{{ ansible_fqdn }}"
+      allowed_content_checksums:
+        - sha224
+        - sha256
+        - sha384
+        - sha512
+    pulp_default_admin_password: "{{ default_pulp_passwd }}"
+
+  pre_tasks:
+    - name: Ensure required RHSM tooling is present
+      ansible.builtin.dnf:
+        name:
+          - subscription-manager
+          - dnf-plugins-core
+        state: present
+
+    # - name: Register system using activation key and org
+    #   community.general.redhat_subscription:
+    #     state: present
+    #     activationkey: "{{ rhsm_activation_key }}"
+    #     org_id: "{{ rhsm_org_id }}"
+    #     release: "{{ rhsm_release }}"
+    #     auto_attach: "{{ rhsm_auto_attach }}"
+    #   when:
+    #     - rhsm_activation_key | length > 0
+    #     - rhsm_org_id | length > 0
+
+    # - name: Register system using RHSM username/password
+    #   community.general.redhat_subscription:
+    #     state: present
+    #     username: "{{ rhsm_username }}"
+    #     password: "{{ rhsm_password }}"
+    #     release: "{{ rhsm_release }}"
+    #     auto_attach: "{{ rhsm_auto_attach }}"
+    #   when:
+    #     - rhsm_activation_key | length == 0
+    #     - rhsm_org_id | length == 0
+    #     - rhsm_username | length > 0
+    #     - rhsm_password | length > 0
+
+    # - name: Fail when no RHSM credentials or activation key are provided
+    #   ansible.builtin.fail:
+    #     msg: >-
+    #       Provide either rhsm_activation_key + rhsm_org_id, or
+    #       rhsm_username + rhsm_password.
+    #   when:
+    #     - rhsm_activation_key | length == 0
+    #     - rhsm_org_id | length == 0
+    #     - (rhsm_username | length == 0 or rhsm_password | length == 0)
+
+tasks:
+    - name: Install Podman
+      ansible.builtin.dnf:
+        name: podman
+        state: present
+
+    - name: Set Podman volume label suffix when SELinux is enforcing
+      ansible.builtin.set_fact:
+        pulp_volume_z: "{{ ':Z' if (ansible_facts.get('selinux', {}).get('status', 'disabled') == 'enabled') else '' }}"
+
+    - name: Ensure Pulp state directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ pulp_data_root }}/settings"
+        - "{{ pulp_data_root }}/pulp_storage"
+        - "{{ pulp_data_root }}/pgsql"
+        - "{{ pulp_data_root }}/containers"
+        - "{{ pulp_data_root }}/container_build"
+
+    - name: Write minimal Pulpcore settings
+      ansible.builtin.copy:
+        dest: "{{ pulp_data_root }}/settings/settings.py"
+        mode: "0644"
+        content: |
+          CONTENT_ORIGIN = "{{ pulp_effective_content_origin }}"
+      vars:
+        pulp_effective_content_origin: >-
+          {{
+            pulp_content_origin
+            if (pulp_content_origin | default('') | length > 0)
+            else (
+              ('https' if pulp_https else 'http')
+              ~ '://' ~ ansible_fqdn ~ ':' ~ (pulp_publish_port | string)
+            )
+          }}
+
+    - name: Run Pulp container
+      containers.podman.podman_container:
+        name: "{{ pulp_container_name }}"
+        image: "{{ pulp_image }}"
+        state: started
+        restart_policy: always
+        pull: newer
+        publish:
+          - "{{ pulp_publish_port }}:{{ '443' if pulp_https else '80' }}"
+        env:
+          PULP_HTTPS: "{{ 'true' if pulp_https else 'false' }}"
+        volumes:
+          - "{{ pulp_data_root }}/settings:/etc/pulp{{ pulp_volume_z }}"
+          - "{{ pulp_data_root }}/pulp_storage:/var/lib/pulp{{ pulp_volume_z }}"
+          - "{{ pulp_data_root }}/pgsql:/var/lib/pgsql{{ pulp_volume_z }}"
+          - "{{ pulp_data_root }}/containers:/var/lib/containers{{ pulp_volume_z }}"
+          - "{{ pulp_data_root }}/container_build:/var/lib/pulp/.local/share/containers{{ pulp_volume_z }}"
+        devices:
+          - /dev/fuse
+
+    - name: Wait for Pulp API to respond
+      ansible.builtin.uri:
+        url: "{{ 'https' if pulp_https else 'http' }}://127.0.0.1:{{ pulp_publish_port }}/pulp/api/v3/status/"
+        validate_certs: false
+        status_code: 200
+      register: pulp_api_check
+      until: pulp_api_check.status == 200
+      retries: 36
+      delay: 5
+
+    - name: Apply admin password when variable is set
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s\n%s\n' "${PULP_PW}" "${PULP_PW}" | podman exec -i "{{ pulp_container_name }}" pulpcore-manager reset-admin-password
+      environment:
+        PULP_PW: "{{ pulp_admin_password }}"
+      when: pulp_admin_password | length > 0
+      no_log: true
