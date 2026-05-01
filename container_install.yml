@@ -149,7 +149,7 @@
           ALLOWED_HOSTS = {{ pulp_merged_allowed_hosts | to_json }}
 
     - name: Allow Pulp port through firewalld
-      community.general.firewalld:
+      ansible.posix.firewalld:
         port: "{{ pulp_publish_port }}/tcp"
         permanent: true
         state: enabled
