@@ -145,7 +145,7 @@
           - "{{ pulp_data_root }}/pgsql:/var/lib/pgsql{{ pulp_volume_z }}"
           - "{{ pulp_data_root }}/containers:/var/lib/containers{{ pulp_volume_z }}"
           - "{{ pulp_data_root }}/container_build:/var/lib/pulp/.local/share/containers{{ pulp_volume_z }}"
-        devices:
+        device:
           - /dev/fuse
 
     - name: Wait for Pulp API to respond
