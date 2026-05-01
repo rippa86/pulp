@@ -27,6 +27,7 @@
     # rhsm_password: ""
     # rhsm_release: "10"
     # rhsm_auto_attach: true
+    pulp_enable_ui: true
 
     # Repos needed on the host for Podman (x86_64). Add CRB only if you need extra build deps.
     rhel_repos:
@@ -166,6 +167,7 @@
         publish:
           - "0.0.0.0:{{ pulp_publish_port }}:{{ '443' if pulp_https else '80' }}"
         env:
+          PULP_UI: "{{ 'true' if pulp_enable_ui | bool else 'false' }}"
           PULP_HTTPS: "{{ 'true' if pulp_https else 'false' }}"
         volumes:
           - "{{ pulp_data_root }}/settings:/etc/pulp{{ pulp_volume_z }}"
@@ -193,6 +195,15 @@
         url: "{{ 'https' if pulp_https else 'http' }}://{{ pulp_public_ip }}:{{ pulp_publish_port }}/pulp/api/v3/status/"
         validate_certs: false
         status_code: 200
+    
+    - name: Verify Pulp UI is served
+      ansible.builtin.uri:
+        url: "{{ 'https' if pulp_https else 'http' }}://127.0.0.1:{{ pulp_publish_port }}/ui/"
+        headers:
+          Host: "{{ pulp_public_hostname }}"
+        validate_certs: false
+        status_code: [200, 302, 304]
+      when: pulp_enable_ui | bool
 
     - name: Apply admin password when variable is set
       ansible.builtin.shell: |
