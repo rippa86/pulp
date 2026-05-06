@@ -13,70 +13,70 @@
   gather_facts: true
 
 #  vars:
-    #pulp_public_hostname: rhel10-pulp.lab.rippa.io
-    #pulp_public_ip: "10.10.4.101"
-    pulp_extra_allowed_hosts: []
-    # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
-    pulp_content_origin: ""
-    # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
-    pulp_manage_firewall: true
-    # RHSM — activation key + org (recommended) or username/password
-    # rhsm_activation_key: ""
-    # rhsm_org_id: ""
-    # rhsm_username: ""
-    # rhsm_password: ""
-    # rhsm_release: "10"
-    # rhsm_auto_attach: true
-    pulp_enable_ui: true
-    # Repos needed on the host for Podman (x86_64). Add CRB only if you need extra build deps.
-    rhel_repos:
-      - "rhel-10-for-x86_64-baseos-rpms"
-      - "rhel-10-for-x86_64-appstream-rpms"
+    # #pulp_public_hostname: rhel10-pulp.lab.rippa.io
+    # #pulp_public_ip: "10.10.4.101"
+    # pulp_extra_allowed_hosts: []
+    # # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
+    # pulp_content_origin: ""
+    # # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
+    # pulp_manage_firewall: true
+    # # RHSM — activation key + org (recommended) or username/password
+    # # rhsm_activation_key: ""
+    # # rhsm_org_id: ""
+    # # rhsm_username: ""
+    # # rhsm_password: ""
+    # # rhsm_release: "10"
+    # # rhsm_auto_attach: true
+    # pulp_enable_ui: true
+    # # Repos needed on the host for Podman (x86_64). Add CRB only if you need extra build deps.
+    # rhel_repos:
+    #   - "rhel-10-for-x86_64-baseos-rpms"
+    #   - "rhel-10-for-x86_64-appstream-rpms"
 
-    # Container / layout
-    pulp_rpm_sync_policy: additive
-    pulp_image: "docker.io/pulp/pulp:stable"
-    pulp_container_name: pulp
-    pulp_publish_port: 8080
-    pulp_https: false
-    pulp_data_root: /var/lib/pulp-stack
-    # Public names clients use (Django ALLOWED_HOSTS + default CONTENT_ORIGIN host).
-    #pulp_public_hostname: rhel-pulp.lab.rippa.io
-    pulp_public_ip: "10.10.4.101"
-    # Extra Host headers to allow (strings). localhost/127.0.0.1 are always added for local checks.
-    pulp_extra_allowed_hosts: []
-    # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
-    pulp_content_origin: ""
-    # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
-    # If set, playbook attempts a non-interactive admin password reset inside the container (use Ansible Vault).
-    pulp_admin_password: ""
-    # Pulp UI (beta) is built into current pulp/pulp OCI images; served at /ui/ . Set false to disable.
-    pulp_enable_ui: true
-    # Must match pulp-oci-images nginx template (template_nginx.py); override if your image differs.
-    pulp_static_root: "/var/lib/operator/static"
-
-    # Pulp RPM: RHEL BaseOS + AppStream remotes/repos (Red Hat CDN). Requires host RHSM entitlement files.
-    pulp_configure_rhel_cdn_repos: true
-    pulp_sync_rhel_cdn_repos: true
-    pulp_admin_username: admin
-    # If empty, falls back to pulp_admin_password for API auth (set one of them for repo tasks).
-    #pulp_api_password: ""
-    # Override if your Ansible controller must use a different URL to reach Pulp than pulp_public_hostname:port.
-    pulp_api_public_base_url: ""
-    pulp_api_validate_certs: true
-    pulp_rpm_remote_policy: on_demand
-    pulp_rpm_sync_timeout: 86400
-    pulp_rhsm_ca_cert_path: /etc/rhsm/ca/redhat-uep.pem
     # # Container / layout
+    # pulp_rpm_sync_policy: additive
     # pulp_image: "docker.io/pulp/pulp:stable"
     # pulp_container_name: pulp
     # pulp_publish_port: 8080
     # pulp_https: false
     # pulp_data_root: /var/lib/pulp-stack
-    # # If set, must be a full URL pulp clients use (e.g. https://pulp.example.com). When empty, derived from FQDN + port.
+    # # Public names clients use (Django ALLOWED_HOSTS + default CONTENT_ORIGIN host).
+    # #pulp_public_hostname: rhel-pulp.lab.rippa.io
+    # pulp_public_ip: "10.10.4.101"
+    # # Extra Host headers to allow (strings). localhost/127.0.0.1 are always added for local checks.
+    # pulp_extra_allowed_hosts: []
+    # # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
     # pulp_content_origin: ""
+    # # Open pulp_publish_port/tcp in firewalld when true (RHEL default firewall).
     # # If set, playbook attempts a non-interactive admin password reset inside the container (use Ansible Vault).
     # pulp_admin_password: ""
+    # # Pulp UI (beta) is built into current pulp/pulp OCI images; served at /ui/ . Set false to disable.
+    # pulp_enable_ui: true
+    # # Must match pulp-oci-images nginx template (template_nginx.py); override if your image differs.
+    # pulp_static_root: "/var/lib/operator/static"
+
+    # # Pulp RPM: RHEL BaseOS + AppStream remotes/repos (Red Hat CDN). Requires host RHSM entitlement files.
+    # pulp_configure_rhel_cdn_repos: true
+    # pulp_sync_rhel_cdn_repos: true
+    # pulp_admin_username: admin
+    # # If empty, falls back to pulp_admin_password for API auth (set one of them for repo tasks).
+    # #pulp_api_password: ""
+    # # Override if your Ansible controller must use a different URL to reach Pulp than pulp_public_hostname:port.
+    # pulp_api_public_base_url: ""
+    # pulp_api_validate_certs: true
+    # pulp_rpm_remote_policy: on_demand
+    # pulp_rpm_sync_timeout: 86400
+    # pulp_rhsm_ca_cert_path: /etc/rhsm/ca/redhat-uep.pem
+    # # # Container / layout
+    # # pulp_image: "docker.io/pulp/pulp:stable"
+    # # pulp_container_name: pulp
+    # # pulp_publish_port: 8080
+    # # pulp_https: false
+    # # pulp_data_root: /var/lib/pulp-stack
+    # # # If set, must be a full URL pulp clients use (e.g. https://pulp.example.com). When empty, derived from FQDN + port.
+    # # pulp_content_origin: ""
+    # # # If set, playbook attempts a non-interactive admin password reset inside the container (use Ansible Vault).
+    # # pulp_admin_password: ""
 
   pre_tasks:
     # - name: Ensure required RHSM tooling is present
