@@ -313,6 +313,8 @@
     - name: Verify Pulp API reachable by IP
       ansible.builtin.uri:
         url: "{{ 'https' if pulp_https else 'http' }}://{{ pulp_public_ip }}:{{ pulp_publish_port }}/pulp/api/v3/status/"
+        headers:
+          Host: "{{ pulp_public_hostname }}"
         validate_certs: false
         status_code: 200
 
