@@ -134,7 +134,7 @@
   tasks:
     - name: Set Facts
       ansible.builtin.set_fact:
-        pulp_public_hostname:: "{{ ansible_facts['fqdn'] }}"
+        pulp_public_hostname: "{{ ansible_facts['fqdn'] }}"
         pulp_public_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
     - name: Install Podman
       ansible.builtin.dnf:
