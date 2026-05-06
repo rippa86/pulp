@@ -12,9 +12,9 @@
   become: true
   gather_facts: true
 
-  vars:
-    pulp_public_hostname: rhel-pulp.lab.rippa.io
-    pulp_public_ip: "10.10.4.101"
+#  vars:
+    #pulp_public_hostname: rhel10-pulp.lab.rippa.io
+    #pulp_public_ip: "10.10.4.101"
     pulp_extra_allowed_hosts: []
     # If set, full URL for CONTENT_ORIGIN. When empty: http(s)://pulp_public_hostname:port
     pulp_content_origin: ""
@@ -41,7 +41,7 @@
     pulp_https: false
     pulp_data_root: /var/lib/pulp-stack
     # Public names clients use (Django ALLOWED_HOSTS + default CONTENT_ORIGIN host).
-    pulp_public_hostname: rhel-pulp.lab.rippa.io
+    #pulp_public_hostname: rhel-pulp.lab.rippa.io
     pulp_public_ip: "10.10.4.101"
     # Extra Host headers to allow (strings). localhost/127.0.0.1 are always added for local checks.
     pulp_extra_allowed_hosts: []
@@ -132,6 +132,9 @@
 
 
   tasks:
+    - name: Set Facts
+        pulp_public_hostname:: "{{ ansible_facts['ansible_fqdn'] }}"
+        pulp_public_ip: "{{ ansible_facts['ansible_default_ipv4']['address'] }}"
     - name: Install Podman
       ansible.builtin.dnf:
         name: podman
